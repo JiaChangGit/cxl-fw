@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "profile": "cxl-m4",
+  "checks": [
+    {
+      "name": "foundation-contract",
+      "argv": [
+        "python3",
+        "scripts/check_foundation.py"
+      ],
+      "modes": [
+        "quick",
+        "full"
+      ],
+      "timeout_sec": 60
+    },
+    {
+      "name": "host-doctor",
+      "argv": [
+        "python3",
+        "scripts/doctor.py",
+        "--report",
+        "results/host/environment.json"
+      ],
+      "modes": [
+        "full"
+      ],
+      "timeout_sec": 90
+    },
+    {
+      "name": "host-toolchain-smoke",
+      "argv": [
+        "python3",
+        "scripts/check_foundation.py",
+        "--toolchain"
+      ],
+      "modes": [
+        "full"
+      ],
+      "timeout_sec": 90
+    },
+    {
+      "name": "python-unit-tests",
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-v"
+      ],
+      "modes": [
+        "quick",
+        "full"
+      ],
+      "timeout_sec": 90
+    },
+    {
+      "name": "m1-cpp-contract",
+      "argv": [
+        "make",
+        "tierlab-test"
+      ],
+      "modes": [
+        "full"
+      ],
+      "timeout_sec": 120
+    },
+    {
+      "name": "m1-cpp-sanitizers",
+      "argv": [
+        "make",
+        "tierlab-sanitize"
+      ],
+      "modes": [
+        "full"
+      ],
+      "timeout_sec": 120
+    },
+    {
+      "name": "m0-guest-boot",
+      "argv": [
+        "python3",
+        "scripts/run.py",
+        "boot",
+        "--repeat",
+        "3"
+      ],
+      "modes": [
+        "full"
+      ],
+      "timeout_sec": 900
+    },
+    {
+      "name": "m1-guest-migration",
+      "argv": [
+        "python3",
+        "scripts/run.py",
+        "migrate",
+        "--repeat",
+        "1"
+      ],
+      "modes": [
+        "full"
+      ],
+      "timeout_sec": 300
+    },
+    {
+      "name": "m2-guest-policy",
+      "argv": [
+        "python3",
+        "scripts/run.py",
+        "policy",
+        "--repeat",
+        "1"
+      ],
+      "modes": [
+        "full"
+      ],
+      "timeout_sec": 1200
+    },
+    {
+      "name": "m3-guest-offline",
+      "argv": [
+        "python3",
+        "scripts/run.py",
+        "offline",
+        "--repeat",
+        "1"
+      ],
+      "modes": [
+        "full"
+      ],
+      "timeout_sec": 360
+    },
+    {
+      "name": "m4-guest-trace",
+      "argv": [
+        "make",
+        "trace-test"
+      ],
+      "modes": [
+        "full"
+      ],
+      "timeout_sec": 360
+    }
+  ]
+}

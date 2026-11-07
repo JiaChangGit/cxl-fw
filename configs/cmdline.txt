@@ -1,0 +1,1 @@
+console=ttyS0,115200 root=/dev/vda rw rootfstype=ext4 init=/sbin/init transparent_hugepage=never numa_balancing=disable memhp_default_state=offline panic=1 oops=panic printk.time=1

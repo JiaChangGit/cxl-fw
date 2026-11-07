@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="zh-Hant-TW"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CXL Memory Tiering Lab｜Kernel / MM 精簡實作規格</title><style>
+:root{color-scheme:light dark;--bg:#f3f5f8;--paper:#fff;--ink:#17202b;--muted:#53606f;--line:#d1d8e1;--accent:#205ec7;--code:#edf0f5}
+@media(prefers-color-scheme:dark){:root{--bg:#10161e;--paper:#17212c;--ink:#e2e8f0;--muted:#a4b4c7;--line:#344254;--accent:#91bbff;--code:#202c3a}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.8 "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
+a{color:var(--accent);text-underline-offset:3px}a:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.wrap{display:grid;grid-template-columns:220px minmax(0,960px);gap:2rem;max-width:1280px;margin:auto;padding:1.5rem 1.5rem 4rem}nav{position:sticky;top:1rem;align-self:start;max-height:calc(100vh - 2rem);overflow:auto;font-size:.88rem}nav ol{list-style:none;padding:0}nav a{display:block;padding:.25rem .4rem;text-decoration:none;color:inherit}
+main{min-width:0;overflow-wrap:anywhere}header{border-bottom:2px solid var(--ink);padding-bottom:1rem}h1{font-size:2rem;line-height:1.35}h2{margin:2.7rem 0 1rem;padding-top:.9rem;border-top:1px solid var(--line);font-size:1.45rem;scroll-margin-top:1rem}h3{font-size:1.1rem;margin:1.7rem 0 .5rem}p,li{max-width:80ch}li{margin:.25rem 0}.meta,.small,figcaption{font-size:.88rem;color:var(--muted)}
+.note,.callout,.evidence{background:var(--paper);border-left:4px solid var(--accent);border-radius:0 8px 8px 0;padding:.75rem 1rem;margin:1rem 0}.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.7rem;margin:1rem 0}.cards>div{padding:.8rem;background:var(--paper);border:1px solid var(--line);border-radius:8px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:1rem 0;background:var(--paper)}table{border-collapse:collapse;width:100%;font-size:.9rem;line-height:1.65}th,td{padding:.6rem .75rem;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}th{background:var(--code)}tr:last-child td{border-bottom:0}
+code,pre{font-family:"Cascadia Mono",Consolas,ui-monospace,monospace}code{font-size:.88em;background:var(--code);padding:.08em .3em;border-radius:4px;overflow-wrap:anywhere}pre{font-size:.84rem;line-height:1.6;overflow:auto;background:var(--code);border:1px solid var(--line);border-radius:8px;padding:1rem}pre code{font-size:inherit;padding:0;background:none;overflow-wrap:normal}
+figure{margin:1.3rem 0}.flow{display:flex;gap:.4rem;align-items:stretch;overflow:auto;padding:.5rem 0}.flow>div{flex:1;min-width:130px;padding:.65rem;border:1px solid var(--line);border-top:3px solid var(--accent);background:var(--paper);border-radius:7px;font-size:.9rem}.flow>span{align-self:center}figcaption{margin-top:.4rem}
+details{border:1px solid var(--line);background:var(--paper);border-radius:8px;padding:.25rem .9rem;margin:.6rem 0}summary{cursor:pointer;font-weight:600;padding:.4rem 0}
+@media(max-width:950px){.wrap{display:block;padding:1rem}nav{position:static;max-height:13rem;border:1px solid var(--line);padding:.5rem;margin-bottom:1.3rem}h1{font-size:1.65rem}}@media(max-width:600px){.cards{grid-template-columns:1fr}.wrap{padding:.75rem}table{min-width:580px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}@media print{:root{--bg:#fff;--paper:#fff;--ink:#000;--muted:#444;--line:#bbb;--code:#f1f1f1}nav{display:none}.wrap{display:block;padding:0}.tbl{overflow:visible}table{min-width:0}pre{white-space:pre-wrap;overflow-wrap:anywhere}.flow{flex-wrap:wrap}.flow>div{flex:1 1 140px}h2,h3{break-after:avoid}}
+</style></head><body><div class="wrap"><nav aria-label="目錄"><strong>CXL Memory Tiering Lab</strong><ol><li><a href="#s0">0. 結論與範圍</a></li><li><a href="#s1">1. 環境、建置與 CXL 上線</a></li><li><a href="#s2">2. 最小架構與檔案</a></li><li><a href="#s3">3. 移頁介面與失敗語意</a></li><li><a href="#s4">4. 固定 workload 與簡單 policy</a></li><li><a href="#s5">5. Epoch 時序與因果評估</a></li><li><a href="#s6">6. Drain、offline 與復原</a></li><li><a href="#s7">7. 五個里程碑與驗收</a></li><li><a href="#s8">8. Kernel trace 與 selftest</a></li><li><a href="#s9">9. 後續深入的兩個實驗</a></li><li><a href="#s10">10. 結果、重跑與停止規則</a></li><li><a href="#s11">11. 結果展示與完成定義</a></li><li><a href="#s12">12. 上游依據</a></li></ol></nav><main><header id="top"><p class="meta">2026-11-06 M4 實作版｜Linux Kernel / Memory Management 實驗</p><h1>CXL Memory Tiering Lab<br>Kernel / MM 精簡實作規格</h1><p>先跑通 CXL 與 Linux MM，再做可評估的簡單策略、安全撤離與 kernel 證據。</p><p class="meta">基線：QEMU 11.1.0、Linux 6.18.56、Ubuntu 26.04 amd64。M0–M4／G0–G5 已完成 KVM Guest 全部驗證及 regression；完整報告見 README、.paef/reports/ 與 results/gates/。本文件離線可讀，無 JavaScript 或外部樣式依賴。</p></header>
+<h2 id="s0">0. 結論與範圍</h2>
+<div class="note good"><b>有條件可實作。</b>先證實 Guest CXL RAM region、DAX/kmem、兩個有效 NUMA nodes 與真實 move_pages，再增加策略。fast/slow 是 userspace placement 角色；兩個 nodes 不代表兩個 kernel memory tiers。</div>
+<div class="cards"><div><b>機制</b><br>CXL 上線、存活頁面移動、資料完整性。</div><div><b>策略</b><br>固定 workload、簡單 policy、因果評估。</div><div><b>Kernel 證據</b><br>Trace、selftest、撤離與失敗處理。</div></div>
+<p>本版只做單一 volatile Type-3、1-way region、4 KiB private anonymous pages、單執行緒 workload、userspace policy 與 safe offline。Guest 專案保留一個 tierlab binary，另執行釘版 Linux 上游 migration selftest 作 baseline；Host 保留一個 Python runner。</p>
+<p><b>刪除本版展開：</b>poison/HWPoison、mailbox 工具、HPA→DPA 解碼器、device_del、switch/DCD/multiway、file-backed/THP tiering、自製 PID1、常駐 daemon、多行程 RPC、每 epoch Host ACK、AIMD、640 MiB full profile。這是範圍取捨，不是宣稱這些功能都無法實作。</p>
+<p>沒有實體 CXL，不宣稱真實 PHY、PCIe 頻寬、裝置延遲、ECC 或 firmware。QEMU 提供 CXL 模型；Guest Linux MM 與 syscall 是真實程式碼。M0–M4 的實作與 Guest 驗證已完成；重跑步驟與原理見<a href="docs/cxl-mm-tutorial.md">教學</a>，本文件保留範圍與驗收契約。</p>
+<h2 id="s1">1. 環境、建置與 CXL 上線</h2>
+<p>保留 QEMU 11.1.0、Linux 6.18.56、Ubuntu resolute amd64；記錄官方來源、已驗 SHA256、compiler、最終 .config 與 binary/image hash，不自動升版。</p>
+<div class="tbl"><table><thead><tr><th>設定</th><th>固定設計與本機條件</th><th>必要驗證</th></tr></thead><tbody>
+<tr><td>Host</td><td>Ubuntu 26.04／WSL；Guest 配置 3 GiB DRAM 與 1 GiB CXL backend，Host 還需要額外記憶體。</td><td>工作區放 Linux filesystem；至少 35 GiB 可用空間；build jobs 依 MemAvailable 決定，重型 build 與 VM 不重疊。</td></tr>
+<tr><td>KVM</td><td>一般使用者 KVM API 12／空 VM probe 與 G0–G5 KVM Guest 均已驗證；新環境仍須重新執行 doctor。</td><td>doctor 先記權限／BOOT_UNPROBED；QEMU 建好後真正 boot 才裁決 KVM/TCG，不能把權限不足當不支援。</td></tr>
+<tr><td>Guest</td><td>3 GiB DRAM＋1 GiB CXL backend；4 vCPU；CFMWS 4 GiB。</td><td>實際 RSS、free、distinct nid；CFMWS 是位址視窗，不是另外配置 4 GiB backend。</td></tr>
+</tbody></table></div>
+<p>KVM/TCG 使用同一標準 workload；TCG 只能校準有上限的 timeout，不能只減 operations 再冒稱相同 Gate。所有 online/offline/sysfs 操作限於指定 Guest，不操作 Windows 或 WSL host 記憶體。</p>
+<h3>Guest 沿用標準 init</h3>
+<p>以 debootstrap minbase 建 rootfs，明列 systemd-sysv、udev、cxl、daxctl、ndctl、numactl、jq、kmod、util-linux、procps 等套件；用發行版 /sbin/init，不自製 PID1。Host 若使用 libnuma headers，加入 libnuma-dev；從 M1 起以 ELF interpreter/DT_NEEDED 與 Guest tierlab --help smoke 驗證 runtime；M0 的 boot 測試不依賴 tierlab。</p>
+<p>一個 systemd oneshot service 啟動 guest/run.sh；After=local-fs.target，Type=oneshot，ExecStart=/usr/local/sbin/tierlab-run，輸出 journal+console，TimeoutStartSec=1800，安裝並啟用至 multi-user.target。run.sh 掛載本 run 的 9p 目錄並驗證白名單 scenario。M0 的 boot scenario 只發布 ready、版本與結果，不配置 CXL、不依賴尚未交付的 tierlab；從 M1 才設定 CXL、執行測試 binary。各分支都保存 exit/log、發布結果並關機。不等待 network，不使用 eval。</p>
+<p>Kernel 以 defconfig＋fragment 建置並審核最終 .config；boot/storage/CXL 必要 driver 優先 built-in。交付對應 kernelrelease 的 modules.builtin、modules.builtin.modinfo，以及需要的模組／depmod 索引。保存 base image hash、完整 package manifest 與來源；未固定 repository snapshot 前，只保證保存的 image 可重跑，不宣稱未來可重建相同 rootfs。</p>
+<p>從 Linux 6.18.56 stable tarball 自編 x86_64 kernel。以 <code>x86_64_defconfig</code> 起始、由 <code>scripts/kconfig/merge_config.sh</code> 合併片段、執行 <code>olddefconfig</code>，最後用 <code>scripts/verify_kernel_config.py</code> 驗證每項。未存在的符號不得填成 <code>=y</code>；先由 6.18.56 Kconfig 找定義與相依關係。</p>
+<div class="tbl"><table><thead><tr><th>類別</th><th>Kernel symbol（須依釘版驗證）</th><th>理由</th></tr></thead><tbody>
+<tr><td>CXL</td><td>CONFIG_CXL_BUS / CXL_PCI / CXL_ACPI / CXL_MEM / CXL_PORT / CXL_REGION</td><td>從 CEDT、PCI 到 region</td></tr>
+<tr><td>System RAM</td><td>CONFIG_DEV_DAX / DEV_DAX_CXL / DEV_DAX_KMEM / ZONE_DEVICE / MEMORY_HOTPLUG / MEMORY_HOTREMOVE</td><td>DAX kmem + hotplug/offline；ZONE_DEVICE 提供 devdax page map，不能只啟用 DEV_DAX</td></tr>
+<tr><td>NUMA/MM</td><td>CONFIG_NUMA / ACPI_NUMA / MIGRATION / COMPACTION</td><td>page migration + runtime memory_tiering sysfs；6.18.56 以 CONFIG_NUMA 編入 memory-tiers.o，沒有獨立 CONFIG_MEMORY_TIERING</td></tr>
+<tr><td>偵測</td><td>CONFIG_DAMON / DAMON_VADDR / DAMON_SYSFS / DEBUG_FS / FTRACE</td><td>DAMON 僅進階；可缺但要報告不支援</td></tr>
+<tr><td>Guest 啟動</td><td>CONFIG_VIRTIO_PCI / VIRTIO_BLK / EXT4_FS / DEVTMPFS / SERIAL_8250 / SERIAL_8250_CONSOLE / 9P_FS / NET_9P / NET_9P_VIRTIO</td><td><code>=y</code>：無 initramfs 時根檔系統與 serial、9p 必須 built-in</td></tr>
+<tr><td>防干擾</td><td>CONFIG_TRANSPARENT_HUGEPAGE、CONFIG_NUMA_BALANCING（功能可編但 boot 關閉）</td><td>試驗時強制 4 KiB、關閉 OS 自動 page relocation</td></tr>
+
+</tbody></table></div>
+
+<p><b>Kernel 封裝契約：</b>只交付 bzImage 不足以完成 rootfs。M0 必須將相同 <code>kernelrelease</code> 的 <code>modules.builtin</code>、<code>modules.builtin.modinfo</code> 與可用的相關索引部署到 Guest <code>/lib/modules/&lt;kernelrelease&gt;/</code>；若配置含可載入模組，須先建置並以 <code>modules_install</code> 安裝，再對 rootfs 執行對應的 depmod。即使 dax_kmem 為 built-in，也要驗證 libkmod 能辨識；以 Guest 的 daxctl 實際切換結果作整合證據，不以 modprobe 檔案缺失誤判 CXL 不支援。</p>
+<p>QEMU 專用測試核心啟用 <code>CONFIG_CXL_REGION_INVALIDATION_TEST=y</code>：6.18.56 的 x86 cache invalidation 會拒絕 Hypervisor，未啟用時 region commit 會回傳 ENXIO。此為上游測試 bypass，不驗證實體 CPU cache 一致性，也不作為實體 CXL 部署設定。DRAM 以明確 NUMA backend 產生 SRAT，CXL 的 target_node 仍由 Guest 探索。</p>
+<p>Boot cmdline：<code>console=ttyS0,115200 root=/dev/vda rw rootfstype=ext4 init=/sbin/init transparent_hugepage=never numa_balancing=disable memhp_default_state=offline panic=1 oops=panic printk.time=1</code>。Guest 啟動腳本 額外將 KSM 設為停用（如果該 sysfs 存在），並記錄 kernel command line。必要 boot 能力缺失即 BLOCKED。</p><h3>QEMU 與 CXL 上線</h3><p>以官方 volatile Type-3 範例為基礎；單一 console，QMP 只用狀態與有界停止。QEMU 不得使用 WSL 套件版的 <code>qemu-system-x86_64</code>；<code>QEMU_BIN</code> 使用絕對路徑。先 build 再檢查 <code>qemu-system-x86_64 -device help</code>、<code>-machine help</code>，真正的 QMP query 經握手再測。完整指令由 <code>scripts/run.py</code> 輸出至 run metadata 後執行。</p>
+
+<pre><code># scripts/run.py 的核心命令；若無 KVM，改 ACCEL=tcg CPU=max。
+QEMU_BIN="$PROJECT_ROOT/install/qemu/bin/qemu-system-x86_64"
+"$QEMU_BIN"   -machine q35,cxl=on,accel="$ACCEL" -cpu "$CPU" -smp 4 -m 3G   -object memory-backend-ram,id=dram0,size=3G   -numa node,nodeid=0,memdev=dram0   -object memory-backend-ram,id=vmem0,share=on,size=1G   -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1   -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2   -device cxl-type3,bus=rp0,volatile-memdev=vmem0,id=cxl-vmem0,sn=0x1   -machine cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G   -kernel "$PROJECT_ROOT/build/kernel/arch/x86/boot/bzImage"   -append "$(cat "$PROJECT_ROOT/configs/cmdline.txt")"   -drive file="$RUN_DIR/rootfs-overlay.qcow2",if=none,id=rootfs,format=qcow2   -device virtio-blk-pci,drive=rootfs,bus=pcie.0   -fsdev local,id=fs0,path="$RUN_DIR/shared",security_model=none   -device virtio-9p-pci,fsdev=fs0,mount_tag=host0,bus=pcie.0   -serial file:"$RUN_DIR/console.log"   -qmp unix:"$RUN_DIR/qmp.sock",server=on,wait=off   -display none -vga none -nic none -no-reboot</code></pre>
+
+<p><b>硬性契約：</b>每次 run 必須由 immutable ext4 base image 建立新的 qcow2 overlay；QMP client 等 greeting → 送 <code>qmp_capabilities</code> → 依 <code>id</code> 關聯回應；事件與非同步回覆分流。若 KVM probe 不通，runner 必須以環境變數選用 TCG，不可在原始碼中混用加速選項。<code>-m</code> 的 <code>maxmem/slots</code> 非此 CXL 配置必要欄位，不加入。</p>
+<p><b>Fast-path 驗證：</b>M1 使用同一 tierlab 完成 64 MiB 匿名頁的 allocation／pattern／query、DRAM → CXL → DRAM roundtrip、CXL 上重寫與全量資料驗證。LinuxMigrator 保留原始 syscall 與獨立 query；不得有 QEMU abort。這是 M1 的機制證據，不作為 M0 的循環前置條件。QEMU／WSL 的結果只證明 emulated placement 與資料路徑，不推論實體 CXL 延遲或 speedup。</p>
+
+<p>Guest 先確認 auto_online_blocks=offline，再依實際 memdev/root decoder 建 RAM region。參數須與釘版 CLI --help 核對：</p>
+<pre><code>cxl create-region -t ram -m -d "$ROOT_DECODER" -w 1 "$MEMDEV"
+daxctl reconfigure-device --mode=system-ram --no-online "$DAXDEV"
+# 只對已核對的白名單 blocks 寫 online_movable，逐一讀回 state。</code></pre>
+<p>以 CXL/DAX JSON、DAX resource、memory block ownership 與 node backlinks 串起同一組資源。不固定 mem0、decoder0.0 或 node1。DRAM/CXL 必須是兩個不同且有 online memory 的 nid；無法證明即 BLOCKED_TOPOLOGY。NUMA nodes 在 boot 保留，hot-add 是啟用記憶體，不是在 runtime 任意建 node。</p>
+
+<h2 id="s2">2. 最小架構與檔案</h2>
+<figure><div class="flow"><div><b>Host runner</b><br>建置、啟 VM、收證據、驗收</div><span aria-hidden="true">→</span><div><b>QEMU／Guest Linux</b><br>CXL、DAX/kmem、MM</div><span aria-hidden="true">→</span><div><b>tierlab</b><br>workload、policy、移頁、評估</div></div><figcaption>一個 VM run 執行一個固定 scenario。每輪 barrier 在 Guest 內完成，Host 不參與每個 epoch。</figcaption></figure>
+<div class="tbl"><table><thead><tr><th>模組</th><th>責任</th><th>邊界</th></tr></thead><tbody>
+<tr><td>Workload</td><td>持有 mapping、固定存取、counts 與 pattern。</td><td>不宣稱頁面位於哪個 node。</td></tr>
+<tr><td>PolicyCore</td><td>counts＋observed placement → 決策。</td><td>不做 I/O、不讀時鐘、不接 hot labels／phase marker。</td></tr>
+<tr><td>LinuxMigrator</td><td>page_id→受控 VA；query/move/query。</td><td>保留 rc/errno/status，不能把 target 當已成功。</td></tr>
+<tr><td>Evaluator</td><td>Workload 真值＋獨立 kernel query → 指標。</td><td>不讀 policy residency cache 作評分。</td></tr>
+<tr><td>Lifecycle／Host</td><td>Guest 管上線/撤離；Host 管 VM、deadline、證據。</td><td>Guest sysfs 不得作用於 WSL host。</td></tr>
+</tbody></table></div>
+<p><b>獨立 evaluator 是模組邊界，不必是另一個 process。</b>首版 mapping 與 syscall 同在 tierlab，以 pid=0 操作，避免 ptrace、跨 PID VA、共享記憶體與額外 IPC。FakeMigrator/LinuxMigrator 共用一個介面即可，不做插件框架。</p>
+<pre><code>cxl-tiering/
+  CMakeLists.txt / Makefile
+  configs/          # versions.lock、kernel.fragment、固定 profile
+  scripts/          # doctor、build、run.py、validate.py
+  guest/            # run.sh、標準 init 的 oneshot service
+  src/              # workload、policy、migrator、evaluator、lifecycle
+  tests/            # 純邏輯、migration selftest、MockSysfs
+  images/           # 唯讀 base
+  results/runs/     # 每次 run 的 config、overlay、raw logs、summary</code></pre>
+<p>模組名是責任，不強制每個名詞拆成新檔案。使用必要的現成 JSON 支援，不自寫 parser，不增加 daemon 或 dashboard。</p>
+<h2 id="s3">3. 移頁介面與失敗語意</h2>
+<p>Linux <code>move_pages(pid, count, pages, nodes, status, flags)</code> 是主線的「機制」；C++ policy 只做決策，不能直接把「希望 page 在哪」誤當作「kernel 已完成」。syscall 在 Guest 內執行，不可用 WSL2 自己的 syscall 測試冒充 Guest CXL migration。</p>
+<div class="tbl"><table><thead><tr><th>API 情境</th><th>正確做法</th><th>驗證</th></tr></thead><tbody>
+<tr><td><code>nodes = NULL</code></td><td>只查詢每頁所在 node。<code>status[i] ≥ 0</code> 是 nid；<code>status[i] &lt; 0</code> 是逐頁錯誤</td><td>保留 full array；不可自行填猜測值</td></tr>
+<tr><td>搬移目標 <code>nodes[i] = target_nid</code></td><td>指定合法 online NUMA node，先做範圍／權限／resident 檢查；常規 flags 用 <code>MPOL_MF_MOVE</code></td><td>逐頁 status 與 query-after 一致</td></tr>
+<tr><td>syscall return = -1</td><td>只看整批 errno；不信任 status array；必須以 query 復原 truth</td><td>注入 EPERM / ESRCH / EINVAL</td></tr>
+<tr><td>syscall return ≥ 0</td><td>不代表全部成功；正回傳可能含尚未嘗試的頁。status 預先填 INT_MIN sentinel，只解析有效且非 sentinel 的元素，再 query-reconcile 全批</td><td>partial success／untouched status 測試；未填值不得當 node 0</td></tr>
+<tr><td><code>status[i] &lt; 0</code></td><td>記錄 -EBUSY/-EACCES/-EFAULT/-ENOENT/-ENOMEM 等逐頁錯誤，保留未知 code</td><td>backoff，有上限；不修改全部頁 state</td></tr>
+<tr><td><code>status[i] = target_nid</code></td><td>暫列成功；獨立 query-after 才把 node 變更寫入 committed residency</td><td>pattern checksum 前後一致</td></tr>
+</tbody></table></div>
+<p>本程式 batch 上限 256 pages（不是 kernel 固定上限）；需要驗證 <code>uintptr_t</code> 加法與 page range 不溢位、每個地址都落在管理的 mapping、mapping 保持存活、每頁已 fault-in、巨頁未介入。首版固定同一 process，pid=0；測試期間 mapping 保持存活，不 fork 或重用 VA。</p>
+<pre><code>// 介面摘要；完整檢查與錯誤分類見 src/migrator.cpp
+struct PageMoveResult {
+    uint64_t page_id;
+    int requested_node;
+    int query_before_node;
+    int move_status;          // 負值是逐頁 errno；非負值為 kernel 回報 node
+    bool move_status_valid;  // sentinel／整批錯誤時 false；仍需 query-after
+    int query_after_node;
+    bool pattern_ok;
+};
+
+// 整批錯誤與逐頁錯誤分開，回傳不得丟棄 errno 或失敗數。
+struct MigrationBatchResult {
+    long syscall_rc;
+    int syscall_errno;        // syscall_rc == -1 時有效
+    std::vector&lt;PageMoveResult&gt; pages;
+};</code></pre>
+<p>真實 Guest 的基礎負測包含無效 VA、非法目標 node，以及使用獨立 disposable mapping 的解除映射案例；不得解除正式 workload mapping 後繼續測試，也不解參考已失效的指標。不可對回傳 errno 寫死預期值；測試要驗證「有錯被分類且未誤更新頁面狀態」。</p>
+<h2 id="s4">4. 固定 workload 與簡單 policy</h2>
+<div class="tbl"><table><thead><tr><th>參數</th><th>唯一標準 profile</th></tr></thead><tbody>
+<tr><td>managed／hot／fast cap</td><td>128／24／32 MiB；4 KiB pages：32768／6144／8192 頁。</td></tr>
+<tr><td>operations／epochs</td><td>每輪 25000；共 60 輪（0–59）；90% 存取 hot，其餘選 cold。</td></tr>
+<tr><td>phase／seeds</td><td>第 30 輪換成不重疊熱集合，policy 不知道切換時間；seeds 1、7、42 都保存。</td></tr>
+<tr><td>機制 probe</td><td>64 MiB，只驗 CXL 存取及 round trip，不冒充 policy profile。</td></tr>
+</tbody></table></div>
+<p>mmap(MAP_PRIVATE|MAP_ANONYMOUS)＋MADV_NOHUGEPAGE，在首次 fault 前 mbind 到 slow nid。填 deterministic pattern(seed,page_id,word_offset)，query 確認所有頁初始在 slow。首版操作只讀與驗證 payload、累積 counts；不做多執行緒 writer/seqlock。</p>
+<p>固定 RNG 與有界抽樣方法，記於 config；同 binary/seed/profile 必須得到同一 access trace。完整掃描至少在初始、phase 切換前、結束時執行；round-trip 測試前後完整掃描其 mapping。GT counts 每輪涵蓋全部頁，0 次是有效值，缺值是資料錯誤。</p>
+<pre><code>instant[p] = min(1.0, access_count[p] / 2.0)
+ewma[p] = 0.5 * instant[p] + 0.5 * previous[p]
+初始：ewma=0、class=Unknown、last_move_epoch=unset。
+HOT：ewma >= 0.60 連續 2 輪；COLD：ewma <= 0.30 連續 3 輪。
+不符合某條件即重設其 counter；中間區間保持 class。
+每輪更新全部頁一次；不按 workload phase reset。</code></pre>
+<p>count/2 與本 profile 的觀測密度一起固定；已由 deterministic core fixtures 與 Guest 對照實驗驗證。測試程式不得自行改 normalization 或門檻。</p>
+<ul>
+<li>每輪最多 2048 attempts、每批最多 256 頁，兩方向共用；只選 COLD fast 頁 demote、HOT slow 頁 promote。</li>
+<li>demote 先按 score 升序、promote 按 score 降序，同分 page_id 升序；不依 unordered 迭代順序。</li>
+<li>成功移頁後至少 5 epochs 再移；drain 例外。EBUSY backoff 為 2、4、8、16、32 epochs，成功清除。</li>
+<li>先 demote → query/commit → 按實際 fast 數與剩餘 attempts 選 promote。demote 失敗不提前釋出容量。</li>
+<li>狀態以 query-after 確認；只有 nid 真正改變才計成功搬移、更新 last_move。不做 AIMD 或通用相依 transaction framework。</li>
+</ul>
+<h2 id="s5">5. Epoch 時序與因果評估</h2>
+<figure><div class="flow"><div>Query before</div><span aria-hidden="true">→</span><div>固定 ops／counts</div><span aria-hidden="true">→</span><div>Query window_end</div><span aria-hidden="true">→</span><div>Policy／move</div><span aria-hidden="true">→</span><div>Query after</div></div><figcaption>整個 epoch 在 Guest 完成。after 不能回填已發生的存取。</figcaption></figure>
+<p>Workload 存取時不搬頁；before/window_end 必須相同，並確認自動 balancing/demotion、reclaim/swap 沒有干擾。端點相同不是沒有中途搬移的完整證明；前提不成立或 query 缺值，該窗標 INVALID_RESIDENCY_WINDOW。每批 move 後仍必 query，不等下一輪。</p>
+<pre><code>awfr_during_epoch = sum(access_count[p] * is_fast(before[p])) / total_ops
+ready_hfr = count(hot_label[p] &amp;&amp; is_fast(after[p])) / hot_page_count
+# PolicyCore 只接 counts／實際位置；hot labels 只供 Evaluator。</code></pre>
+<p>B0 全 slow；B1 首次操作前以已知初始 hot labels 靜態配置 fast，phase shift 後不重配；B2 為本版 phase-blind policy。三組使用相同 seed/trace、fast cap、全 slow 起始狀態；列明 B1 使用初始 labels，不當成無提示策略。</p>
+<p>報完整 cold-start 窗口與最後 10 輪穩態，包含 B1/B2 初始 moves；保存 raw counts、before/window_end/after、attempts 與失敗。HFR/AWFR 是 placement 結果，不能直接當真機 speedup。</p>
+<details><summary>選用：一個簡化成本模型即可</summary><pre><code>T = fast_accesses + rho * slow_accesses + copy_cost * successful_moves
+modeled_speedup = T_baseline / T_policy</code></pre><p>同一 trace、相同參數，初始 moves 也計入。這只計 access＋成功 copy，未計 query、failed attempts、觀測與 policy CPU cost；必標 basis=modeled。不設 speedup PASS 門檻，不增加模型框架或強制 break-even 報表。</p></details>
+<h2 id="s6">6. Drain、offline 與復原</h2>
+<p>Lifecycle 只有 ACTIVE → DRAINING → OFFLINE；無法安全完成就 FAILED。DRAINING 禁止向 CXL 搬入新頁；所有 sysfs 寫入由 Guest lifecycle 模組執行。</p>
+<p>白名單以 checked arithmetic 建立 DAX/block 半開區間；block 必須完整包含且 ownership/nid/zone 可核對。部分交集、holes、來源不明直接拒絕。容量預檢讀實際 fast node free、MemAvailable 與待撤離 bytes，另留 256 MiB safety margin；預檢不保證 syscall 成功。</p>
+<p>本節只在 <b>Guest</b> 運作。<b>先列印預計變更的 memory blocks 並核對 CXL DAX 範圍，才允許寫 sysfs。</b>流程以 kernel 官方 <code>online_movable</code> / <code>offline</code> 介面為基礎；ZONE_MOVABLE 提高 offlining 可行性，但官方明確指出仍可能失敗或耗時很長，因此不得把任何一次 offline 當成必定成功。</p>
+
+<div class="tbl"><table><thead><tr><th>動作</th><th>必要 preflight</th><th>結果與失敗處理</th></tr></thead><tbody>
+<tr><td>建立 CXL RAM region</td><td>已列舉 memdev 與 root decoder；依 <code>cxl --help</code> 使用釘版 CLI；region mode=ram、ways=1</td><td>驗證 HPA size、resource、DAX region、dmesg</td></tr>
+<tr><td>kmem</td><td>對 dax device 以支援的 <code>daxctl reconfigure-device --mode=system-ram --no-online</code> 模式轉換</td><td>先檢查實際 help；無支援要 BLOCKED，禁止臨時改其他功能</td></tr>
+<tr><td>online</td><td>對應 blocks 事先 offline、zone 支援 Movable；只有 Guest</td><td>逐個 <code>online_movable</code> 並核對 <code>state</code>/<code>valid_zones</code>；不得批次無條件寫</td></tr>
+<tr><td>開始 drain</td><td>鎖定 controller admission，保留 fast memory safety margin；當下 read <code>MemAvailable</code> 及 node free</td><td>不足容量直接拒絕，不能先 offline；DRAINING 暫停 32 MiB 人工 policy cap，改以實際 DRAM 容量與總 deadline 守門；不受最短駐留限制</td></tr>
+<tr><td>停止 workload 與 offline</td><td>所有 managed pages 已從 CXL 搬出、worker 停止、映射已解除；block whitelist 完整</td><td>逐 block <code>offline</code>；若失敗，先保存當時所有 block state，再 attempt rollback</td></tr>
+<tr><td>最後 teardown</td><td>全部 DAX 對應 memory blocks 狀態 offline，Guest console 健康</td><td>依 daxctl/cxl CLI 脫離 system-ram / destroy region；若任何 block online，guard 拒絕操作</td></tr>
+</tbody></table></div>
+
+
+
+
+<p>Drain 沿用每批 256 頁，不受一般每 epoch 2048 attempts 限制，改受整體 deadline 與真實容量限制；每批 query，失敗不無限重試。managed slow pages=0 且完整 pattern 通過後，才解除正式 mapping 並進入 offline。M3 的固定 drain profile 為 128 MiB，Guest deadline 60 秒、每頁最多 3 次 attempts；Host VM timeout 為 300 秒，kernel 卡住時不並行重試。</p>
+<p><b>復原範圍：</b>逐 block 保存 before snapshot；offline 失敗時，只將本次已成功 offline 的 blocks 逆序恢復 online_movable，逐一讀回。失敗快照逐 block 保留不可讀狀態與 errno；只有最後整份白名單都恢復原本 online 狀態，才回報 rollback_complete。不承諾恢復已搬移或已釋放的 workload；首版失敗後結束 run，以新 overlay 重跑，不做自動恢復 daemon。</p>
+<p>MockSysfs 必測第 k 次 offline 失敗與 rollback 再失敗；容量不足時任何 offline 寫入都尚未發生。真實 EBUSY 出現才記，不要求 mlock/pinning 或 online_kernel 必定造成固定 errno。sysfs 卡住時，終止 helper 不代表 kernel 動作取消；timeout 後不並行重試，由 Host 保存紀錄並有界停 VM。</p>
+<h2 id="s7">7. 五個里程碑與驗收</h2>
+<p>依下表實作，取代舊版跳號 Phase。每階段一份 summary.json＋raw logs 即可；不維護重複的逐階段 Markdown。未執行一律 NOT_RUN。</p>
+<div class="tbl"><table><thead><tr><th>里程碑</th><th>工作</th><th>Gate</th></tr></thead><tbody>
+<tr><td>M0 環境／boot</td><td>doctor、版本鎖、QEMU/kernel/rootfs、標準 init/service。</td><td><b>G0：</b>來源/config 可核對；實際 KVM/TCG 裁決；同 image 連續 3 次乾淨 boot/shutdown，無 panic/oops。</td></tr>
+<tr><td>M1 CXL／移頁</td><td>最小 helper 先打通 CXL/NUMA，再完成 LinuxMigrator。</td><td><b>G1：</b>volatile Type-3、1-way RAM region、movable blocks、distinct valid nid、64 MiB CXL 讀寫。<b>G2：</b>64 MiB fast→slow→fast、pattern 全相符，呼叫前固定 eligible 集合成功率 ≥95%，query 無缺值。</td></tr>
+<tr><td>M2 Policy</td><td>純 core/FakeMigrator 測試；B0/B1/B2 對照與因果評估。</td><td><b>G3：</b>三 seeds 各 60 epochs；B2 最後 10 輪 ready HFR 中位數 ≥0.85；反轉後 20 輪內 ready HFR ≥0.80；完整性、query、cap/budget 全部通過。</td></tr>
+<tr><td>M3 Offline</td><td>drain、容量 guard、逐 block offline、MockSysfs。</td><td><b>G4：</b>真實白名單 blocks 全 offline、合法 teardown；容量不足、partial rollback、rollback 失敗負測各抓到預期行為。</td></tr>
+<tr><td>M4 Kernel 證據</td><td>Trace、最小 selftest、重跑與短 demo。</td><td><b>G5：</b>syscall→trace→query 對照；一正常與一失敗 testcase；辨識 trace 缺漏；G0–G4 regression 通過，證據可定位。</td></tr>
+</tbody></table></div>
+<p>M1 即可交付機制原型；完整第一版需 M0–M4。G3 常數已由 core fixture 與真實 Guest 驗證，沒有調降。三 seeds 的 B2 最後 10 輪 ready HFR 中位數皆為 1.0，反轉後於 epoch 37 達到 ≥0.80；這是 kernel placement 指標，不代表實體硬體 speedup。若未來改動無法達標，應找 policy/trace 根因，不能讓測試程式自行降低門檻。</p>
+<div class="tbl"><table><thead><tr><th>必要反例</th><th>必須驗到</th></tr></thead><tbody>
+<tr><td>覆寫 payload word</td><td>checksum FAIL，整合 Gate 不通過。</td></tr>
+<tr><td>反轉 hot/cold 排序／budget=0</td><td>policy 改善或成功數一致性失敗。</td></tr>
+<tr><td>demote 全失敗仍計畫 promote</td><td>依實際容量截斷，不得超 cap。</td></tr>
+<tr><td>整批錯誤／status sentinel／失效 VA</td><td>不誤當 node0 或成功，仍保留 raw/query。</td></tr>
+<tr><td>offline/rollback 失敗</td><td>只逆序恢復本次 blocks；不完整即 FAILED，不 destroy。</td></tr>
+<tr><td>缺 query／錯 run_id／trace 截斷</td><td>驗收器拒絕不完整或跨 run 證據。</td></tr>
+</tbody></table></div>
+<p>外層負測只有指定問題被抓到才 PASS，任意 crash/timeout 不算。必要 core tests 跑 ASan/UBSan；不設任意 coverage 百分比或龐大 fuzz 次數門檻。</p>
+<h2 id="s8">8. Kernel trace 與 selftest</h2>
+<p><b>要回答的問題：</b>一批 move_pages 如何走到頁面隔離、migration entry、copy/remap，再回到原 VA？哪一些失敗來自輸入／權限，哪一些發生在真正移頁時？</p>
+<ol>
+<li>先限定一個 migrator PID、4 KiB 匿名頁。以 trace_marker 標記 run_id/epoch/batch，啟用實際存在的 <code>migrate:mm_migrate_pages_start</code>、<code>migrate:mm_migrate_pages</code>；需要時再開 set/remove_migration_pte。保存 trace event 的 format 與 kernel config。</li>
+<li>同批保存 syscall rc/errno、status validity、query-before/after、checksum；正常 round trip 之後，再測合法／無效 VA 混合與不合法 target。依失敗階段設定 expected trace：非法 node/VA 若在 validation 階段被拒絕，沒有 migration event 可以是正確結果，不等於 collector 丟事件。用原有 MM selftest 當 baseline，再補針對本測試程式的最小 regression case。</li>
+<li>單一 collector 消費 trace_pipe，記錄 buffer overrun／丟事件；需要 call graph 時先查 available_filter_functions，只針對存在的 migration／offline 函式開窄範圍 function graph。</li>
+</ol>
+<div class="evidence"><b>交付：</b>batch 對照報告、可重跑的 kselftest 風格測試、request→kernel→query 的證據鏈。<b>驗收：</b>mapping 存活、原 VA 資料相符、nid 如預期變更；錯 batch、缺 query、trace 截斷都會被 validator 抓出。Aggregate tracepoint 沒有完整逐 VA 的 source/target，不能把其計數強行當逐頁結果。</div>
+<p><b>M4 實作：</b>64 個 4 KiB 頁、五個 TAP cases：正常往返、合法／無效 VA 混合、混合後返回、非法 target。單一 collector 使用獨立 instance、PID filter、mono clock 與啟動握手；保存所有 CPU 的 overrun／dropped counters、event formats 與 config。上游 <code>migration.private_anon</code> 先作 baseline。Host 逐批核對 syscall／trace／query，另外從真實 trace 在記憶體產生缺事件、錯 batch、截斷反例；反例明確標 modeled，原始 trace 不修改。Aggregate events 只核對該批總數，逐 VA placement 仍來自 kernel query。</p>
+<p>依據：<a href="https://raw.githubusercontent.com/gregkh/linux/v6.18.56/include/trace/events/migrate.h">6.18.56 migrate tracepoints</a>、<a href="https://raw.githubusercontent.com/gregkh/linux/v6.18.56/tools/testing/selftests/mm/migration.c">既有 migration selftest</a>、<a href="https://docs.kernel.org/6.18/trace/ftrace.html">ftrace</a>。既有事件不足時，再以實際缺口提出小型 instrumentation patch；不為了有 kernel diff 而先改 MM 行為。</p>
+<h2 id="s9">9. 後續深入的兩個實驗</h2>
+<p>M0–M4 完成後再啟動；每項獨立 profile、run 與驗收，不擴張第一版狀態機。</p>
+<div class="tbl"><table><thead><tr><th>實驗</th><th>最小實作與驗收</th></tr></thead><tbody>
+<tr><td>R1 DAMON observer</td><td>先只觀測、不移頁；一個 context/target＋managed VA range。stat scheme tried_regions 或 damon_aggregated 擇一做 adapter；比較連續/交錯 hotset 與反轉，報 coverage、byte-weighted precision/recall、偵測延遲、region 大小與丟資料。</td></tr>
+<tr><td>R2 Kernel live offlining</td><td>獨立 canary mapping 留在 CXL，不預先 drain/munmap；writer 在 barrier 暫停，對核對 blocks offline 讓 kernel 撤離。同 VA 全量 pattern 相符、nid 轉出、blocks offline、trace reason=memory_hotplug；失敗禁止 teardown。</td></tr>
+</tbody></table></div>
+<p>DAMON nr_accesses 是採樣命中，不是精確 operations；region→page 投影標 estimated。worker 須在有界觀測窗持續操作，固定 25000 ops 可能短於 aggregation interval；先驗觀測品質，再接 policy，另定門檻，不直接套 G3。起步時不混做採樣與並行移頁。</p>
+<p>THP/folio、kernel reclaim demotion 留待 R1/R2 穩定後再選一個：THP 先證明實際 backing；demotion 先證明 distinct tier 與可用 target。不列第一版檔案、Gate 或工期要求。</p>
+<h2 id="s10">10. 結果、重跑與停止規則</h2>
+<pre><code>results/runs/&lt;run_id&gt;/
+  config.json           # run_id、scenario
+  meta.json             # binary/image/config hashes、accel、QEMU argv
+  console.log           # 原始 serial console
+  dmesg.log             # Guest kernel 診斷
+  topology.json         # Host 核對的 CXL/DAX/sysfs 拓樸
+  shared/               # 此 run 專用 9p 目錄
+    topology.json       # Guest 原始拓樸與 blocks
+    migration.jsonl     # M1：逐批 query/syscall/query
+    policy.jsonl        # M2：counts、before/window_end/after、batches
+    drain.jsonl         # M3：撤離資料
+    offline.jsonl       # M3：block state、teardown、失敗快照
+    trace_batches.jsonl # M4：逐批 syscall 與 query
+    trace.log           # M4：markers 與 migration events
+    collector.json      # M4：formats/hashes/loss/cleanup
+  *_verified.json       # 對應 scenario 的 Host 重算結果</code></pre>
+<p>各 scenario 的原始 JSONL 與摘要均有必要欄位檢查；Host gate 保存最終狀態與 evidence paths，不建通用事件平台。每筆帶 run_id、scenario、kind、epoch/batch（適用時）與 evidence_basis。保存足以重算指標的 counts、before/window_end/after，不記錄每一次 memory access。</p>
+<p>JSONL 串流寫入；摘要 temp→flush/fsync→rename 發布。Host 重算 attempts/成功數、HFR/AWFR、cap/budget、query coverage 與 hashes，不能只信 Guest 印 PASS。evidence_basis 限 guest_kernel_measured、qemu_emulated、modeled、host_diagnostic；Host/Guest monotonic clocks 不直接相減。</p>
+<p>一個 scenario 一次 VM，config 在 boot 前固定。Guest 完整執行後發布結果、印含 run_id 的完成標記並關機；Host 同時核對結果、QEMU exit 與 console。不中途 RPC、重送、重連或失敗續跑。只有本 run 目錄經 9p 分享。</p>
+<pre><code>make doctor          # 權限、依賴、資源與 KVM 空 VM；Guest boot=NOT_RUN
+make build           # 分開建 QEMU/kernel/rootfs/tierlab，共用重工作鎖
+make boot-test       # G0
+make migrate-test    # G1/G2
+make policy-test     # native core/FakeMigrator + 真實 Guest G3
+make offline-test    # drain + 白名單 offline/teardown，真實 Guest G4
+make trace-test      # upstream MM baseline + syscall/trace/query，G5
+make check           # Host、C++/sanitizer、完整 G0–G5
+make demo            # 重算保存的真實證據，不建置或啟動 VM</code></pre>
+<p>狀態／exit：PASS=0、FAIL=1、USAGE=2、BLOCKED=78、TIMEOUT=124、CRASHED=125；未執行記 NOT_RUN。來源無法驗證、topology 模糊、panic/oops、pattern mismatch、query 無法確認 placement、offline 復原不完整，立即停止該 run 並保存 first failure。</p>
+<p>保存命令、版本、console/sysfs/trace，再做有界停止：正常關機 → QMP quit → 必要時只清理本 run 的明確 QEMU PID。不重用失敗 overlay、不覆寫成功結果，不以 mock 取代 Guest。</p>
+<h2 id="s11">11. 結果展示與完成定義</h2>
+<p><b>完整第一版（2026-11-06 已完成）：</b>G0–G5 都有實際 PASS、必要反例確實被抓到、資料完整、同輸入可重跑。只完成 M1 就說完成機制原型；R1/R2 未做不影響第一版完成。</p>
+<p>五分鐘展示：拓樸與地址層次 → 一批 syscall/trace/query → phase shift 的 ready HFR/causal AWFR → 一個失敗或 offline guard → 原始證據。使用已建置 binary/image 或真實保存 run，不現場等待編譯。</p>
+<details><summary>自己寫什麼？Kernel 做什麼？</summary><p>自己寫 workload、policy、API 結果處理、evaluator、lifecycle 與測試。Linux 負責隔離、copy、migration entry、PTE/TLB 一致性；QEMU 提供 CXL 模型，不是實體 firmware。</p></details>
+<details><summary>為何 userspace policy 仍能展示 Kernel 深度？</summary><p>決策可決定性測試；機制透過真實 syscall、trace、selftest 與故障定位說明。遇到真正 kernel bug 或測試缺口，再準備最小 patch＋regression；不為了有 kernel diff 而改 MM 行為。</p></details>
+<details><summary>為何非負 return、ZONE_MOVABLE 都不能保證成功？</summary><p>前者要看 status 有效性與 query-after；後者仍受容量、pinning、metadata 等影響。展示原始失敗與恢復範圍，不用固定 errno 或直接拔除取代驗證。</p></details>
+<details><summary>評估如何避免高估？</summary><p>before 計 causal AWFR，after 計 ready HFR；未知頁不刪分母。Model 明示假設，不能把 emulator wall-time 當真機 CXL speedup。</p></details>
+<h2 id="s12">12. 上游依據</h2>
+<p>版本與機制已查證，Guest 能力仍須實測。master/latest 只作工具說明；參數以實際釘版 binary 為準。</p>
+<ul>
+<li><a href="https://www.qemu.org/2026/08/11/qemu-11-1-0/">QEMU 11.1.0 release</a>；<a href="https://www.kernel.org/pub/linux/kernel/v6.x/">Linux releases</a>；<a href="https://www.qemu.org/docs/master/system/devices/cxl.html">QEMU CXL</a>；<a href="https://qemu.googlesource.com/qemu/+/680935c9a6fff2df0665b680322b9e9d0cdb692b">RAM-alias commit</a>。</li>
+<li><a href="https://pmem.io/ndctl/cxl/cxl-create-region.html">cxl-create-region</a>；<a href="https://pmem.io/ndctl/daxctl/daxctl-reconfigure-device.html">daxctl-reconfigure-device</a>；<a href="https://docs.kernel.org/6.18/driver-api/cxl/linux/early-boot.html">NUMA/tier creation</a>；<a href="https://docs.kernel.org/driver-api/cxl/linux/dax-driver.html">DAX/kmem</a>。</li>
+<li><a href="https://man7.org/linux/man-pages/man2/move_pages.2.html">move_pages(2)</a>；<a href="https://raw.githubusercontent.com/gregkh/linux/v6.18.56/mm/migrate.c">6.18.56 migrate.c</a>；<a href="https://docs.kernel.org/kbuild/kbuild.html">Kbuild metadata</a>。</li>
+<li><a href="https://raw.githubusercontent.com/gregkh/linux/v6.18.56/include/trace/events/migrate.h">migration events</a>；<a href="https://raw.githubusercontent.com/gregkh/linux/v6.18.56/tools/testing/selftests/mm/migration.c">migration selftest</a>；<a href="https://docs.kernel.org/6.18/trace/ftrace.html">ftrace</a>。</li>
+<li><a href="https://docs.kernel.org/6.18/admin-guide/mm/memory-hotplug.html">Memory Hot(Un)Plug</a>；<a href="https://raw.githubusercontent.com/gregkh/linux/v6.18.56/mm/memory_hotplug.c">memory_hotplug.c</a>。</li>
+<li><a href="https://raw.githubusercontent.com/gregkh/linux/v6.18.56/Documentation/admin-guide/mm/damon/usage.rst">DAMON usage</a>；<a href="https://raw.githubusercontent.com/gregkh/linux/v6.18.56/Documentation/mm/damon/design.rst">design</a>；<a href="https://raw.githubusercontent.com/gregkh/linux/v6.18.56/include/trace/events/damon.h">events</a>。</li>
+<li><a href="https://raw.githubusercontent.com/systemd/systemd/main/man/systemd.service.xml">systemd.service</a>；<a href="https://raw.githubusercontent.com/systemd/systemd/main/man/systemd.exec.xml">systemd.exec</a>。</li>
+</ul>
+<p class="meta"><a href="#top">回頁首</a>｜<a href="docs/cxl-mm-tutorial.md">GitHub 教學</a>｜<a href="docs/cxl-mm-tutorial.html">離線教學</a></p>
+</main></div></body></html>

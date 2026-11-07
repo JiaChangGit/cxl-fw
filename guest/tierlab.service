@@ -1,0 +1,13 @@
+[Unit]
+Description=CXL tiering lab scenario
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tierlab-run
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

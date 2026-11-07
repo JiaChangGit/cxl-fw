@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "stage": "m4",
+  "qemu": {
+    "version": "11.1.0",
+    "source_sha256": "6ee1d1a61f68212476b27108c26da5f449dc09b626d42f8279ba0dc2e08fa858",
+    "state": "verified",
+    "source_url": "https://download.qemu.org/qemu-11.1.0.tar.xz",
+    "verification": {
+      "method": "gpg-detached-signature",
+      "signer_fingerprint": "CEACC9E15534EBABB82D3FA03353C9CEF108B584",
+      "key_source": "https://keys.openpgp.org/vks/v1/by-fingerprint/CEACC9E15534EBABB82D3FA03353C9CEF108B584"
+    }
+  },
+  "linux": {
+    "version": "6.18.56",
+    "source_sha256": "4633bbda2ab95eaf2a7af4041236451d6759c72e6946265531af4b3aacefbf89",
+    "state": "verified",
+    "source_url": "https://www.kernel.org/pub/linux/kernel/v6.x/linux-6.18.56.tar.xz",
+    "verification": {
+      "method": "sha256-official-https",
+      "checksum_source": "https://www.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc"
+    }
+  },
+  "rootfs": {
+    "suite": "resolute",
+    "arch": "amd64",
+    "state": "built"
+  }
+}

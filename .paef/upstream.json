@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "framework": "PAEF",
+  "version": "2.0.0",
+  "adoption": "selected files; not a manager installation",
+  "archive_name": "PAEF-v2.0.0-complete.zip",
+  "archive_sha256": "09c5d49aa85c7c8e8ba5e82ab943c983a5077004ff6c08c1b822a17336ef63ce",
+  "selected_files": [
+    {
+      "destination": ".paef/LICENSE",
+      "source": "paef/LICENSE",
+      "sha256": "c32991e5aab0b899bc74f864b0f3476164f1e1e2688c560010c0df2a05aec8f8",
+      "modified": false
+    },
+    {
+      "destination": ".paef/scripts/quality_gate.py",
+      "source": "paef/scripts/quality_gate.py",
+      "sha256": "36245b0f0b19df0de34cba5e461eabc2edebcce4884e15bc2435f09e3cf65385",
+      "modified": false
+    },
+    {
+      "destination": ".agents/skills/code-review/SKILL.md",
+      "source": "paef/skills/code-review/SKILL.md",
+      "sha256": "fae5d4e99af0611fc0cf21e355150752c1de28544c2890b620071a4967d522ab",
+      "modified": false
+    },
+    {
+      "destination": ".agents/skills/bug-rca/SKILL.md",
+      "source": "paef/skills/bug-rca/SKILL.md",
+      "sha256": "4add91d35fcca8eb3ac98b3aebce779e85386f2c5e82c597ee7817f6abb04c2c",
+      "modified": false
+    },
+    {
+      "destination": ".agents/skills/cpp-rust-safety/SKILL.md",
+      "source": "paef/domains/kernel/skills/cpp-rust-safety/SKILL.md",
+      "sha256": "c3c843d371fc069129267ed2f04b8f9d4197ab56a35f0bd492a5e8ea109505cc",
+      "modified": false
+    },
+    {
+      "destination": ".agents/skills/kernel-rca/SKILL.md",
+      "source": "paef/domains/kernel/skills/kernel-rca/SKILL.md",
+      "sha256": "22fa311fd59406f8ee900d1d6ce8950ebaebdb9f839f9f20ef8db84e43c60583",
+      "modified": false
+    },
+    {
+      "destination": ".agents/skills/qemu-gdb-tracing/SKILL.md",
+      "source": "paef/domains/kernel/skills/qemu-gdb-tracing/SKILL.md",
+      "sha256": "3e7efc415fb8c7c43ad15983578aac2b7a9337c3ee853e4b0200a0bb043a0655",
+      "modified": false
+    }
+  ],
+  "not_installed": [
+    "manager",
+    "generic kernel/cpp profiles",
+    "MCP server",
+    "CI and hooks",
+    "other-agent mirrors",
+    "project runtime"
+  ],
+  "guidance_adapted_from": [
+    "paef/templates/AGENTS.md",
+    "paef/domains/kernel/ENVIRONMENT.md"
+  ]
+}
