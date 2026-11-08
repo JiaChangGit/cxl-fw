@@ -1,6 +1,6 @@
 # CXL Memory Tiering Lab：從建置到核心追蹤
 
-這份教學從 NUMA 與 CXL 記憶體的關係出發，建立 QEMU／Linux Guest，再追蹤一個匿名頁如何配置、移動、驗證與撤離。所有函式、檔名和實驗參數都對應目前專案的 M0–M4 實作。
+這份教學從 NUMA 與 CXL 記憶體的關係出發，建立 QEMU／Linux Guest，再追蹤一個匿名頁如何配置、移動、驗證與撤離。所有函式、檔名和實驗參數都對應目前專案的 M0–M4 實作；MM 是 Memory Management，指 Linux 的記憶體管理機制。
 
 預備知識：能閱讀 C/C++、使用 Linux shell，知道指標、虛擬記憶體與程序的基本概念。尚未接觸 NUMA、CXL、tracefs 或 Linux MM 原始碼，也可以依序閱讀。
 
@@ -28,6 +28,8 @@
 ## 0. 閱讀路線與證據邊界
 
 先完成建置與第一次開機，再閱讀一批移頁的輸入、syscall 與 query，最後加入 policy 與撤離。每一步都應能指出「送出了什麼要求」、「哪份紀錄證明實際發生」和「失敗時在哪裡停止」。
+
+先記住幾個會反覆出現的名稱：**Host** 是執行虛擬機的系統；**Guest** 是虛擬機內執行的系統；**VM** 是 Virtual Machine，也就是虛擬機。QEMU 提供虛擬硬體，KVM（Kernel-based Virtual Machine）可提供硬體虛擬化加速。**syscall** 是使用者程式向核心請求服務的系統呼叫；**query** 是查詢，**policy** 是依觀測結果選擇行動的策略。
 
 ```mermaid
 flowchart LR
@@ -68,9 +70,9 @@ flowchart LR
 
 ### 1.1 NUMA node 描述什麼
 
-NUMA 是 Non-Uniform Memory Access。Linux 以 node 表示一組記憶體及其拓樸關係；一個 node 可以有記憶體而沒有 CPU。Node ID 是識別碼，不能只靠數字大小判斷快慢。本專案從實際 sysfs、CXL range 與記憶體容量辨識 fast／slow node，不把 slow node 寫死為 1。[Linux NUMA 說明](https://docs.kernel.org/mm/numa.html)描述了 node 與 CPU／記憶體不必一一配對的關係。
+NUMA 是 Non-Uniform Memory Access，意指處理器存取不同位置的記憶體時，成本可能不同。Linux 以 node 表示一組記憶體及其拓樸關係；一個 node 可以有記憶體而沒有 CPU。Node ID 是識別碼，不能只靠數字大小判斷快慢。本專案從實際 sysfs、CXL range 與記憶體容量辨識 fast／slow node，不把 slow node 寫死為 1。sysfs 是 Linux 透過檔案介面呈現裝置與核心物件資訊的機制。[Linux NUMA 說明](https://docs.kernel.org/mm/numa.html)描述了 node 與 CPU／記憶體不必一一配對的關係。
 
-假設一個 4 KiB 匿名頁先位於 node 0，`move_pages` 把它移到 node 1。程序仍以原本的虛擬位址讀寫；核心安排新的實體頁、複製內容並更新映射，使用者不必把所有指標改成另一個 VA。這也是為什麼驗收要同時查位置與掃描內容：其中一項成功，不能代替另一項。
+假設一個 4 KiB 匿名頁先位於 node 0，`move_pages` 把它移到 node 1。程序仍以原本的虛擬位址讀寫；核心安排新的實體頁、複製內容並更新映射，使用者不必把所有指標改成另一個 VA（Virtual Address，虛擬位址）。這也是為什麼驗收要同時查位置與掃描內容：其中一項成功，不能代替另一項。
 
 ```mermaid
 flowchart TB
@@ -98,11 +100,11 @@ flowchart TB
 | 4 GiB CFMWS | CXL Fixed Memory Window 的位址路由視窗 | 不是另外增加 4 GiB 已配置 RAM |
 | 3 GiB rootfs image | Guest 磁碟檔案系統容量 | 和 Guest DRAM 3 GiB 沒有容量共用關係 |
 
-QEMU 的 CXL 模型提供 host bridge、root port、Type-3、decoder 與位址視窗，讓 Guest 走裝置發現與記憶體配置路徑；此模型的用途與限制可參照 [QEMU CXL 文件](https://www.qemu.org/docs/master/system/devices/cxl.html)。本專案的命令與原始碼仍以釘版 11.1.0 為準。
+CXL 是 Compute Express Link，一種可用於連接記憶體裝置等元件的互連技術；本專案使用的 Type-3 是記憶體裝置類型。QEMU 的 CXL 模型提供 host bridge、root port、Type-3、decoder 與位址視窗，讓 Guest 走裝置發現與記憶體配置路徑；decoder 負責將位址範圍導向對應目標。此模型的用途與限制可參照 [QEMU CXL 文件](https://www.qemu.org/docs/master/system/devices/cxl.html)。本專案的命令與原始碼仍以釘版 11.1.0 為準。
 
 ### 1.3 裝置存在，為什麼還不能拿來配置匿名頁
 
-`cxl list` 看見 memdev，只證明裝置被發現。還需要建立 RAM region、經過 DAX/kmem 把 range 交給一般記憶體管理，並讓對應 blocks 上線。
+`cxl list` 看見 memdev，只證明記憶體裝置被發現。還需要建立 RAM region、經過 DAX/kmem 把 range 交給一般記憶體管理，並讓對應 blocks 上線。region 是配置出的記憶體位址範圍；DAX 是 Direct Access 的縮寫，提供裝置記憶體存取介面；此處的 kmem 路徑將 DAX 範圍交給記憶體熱插拔機制，供核心管理為 system RAM。
 
 ```mermaid
 flowchart TB
@@ -121,7 +123,7 @@ flowchart TB
 
 ### 1.4 本專案刻意固定的條件
 
-只處理 4 KiB private anonymous pages、單執行緒 workload、單一 volatile Type-3 與 1-way region。關閉實驗中的 THP、automatic NUMA balancing、KSM、swap 與自動 demotion 干擾，才能把 query 的變化連回本專案送出的移頁要求。這是控制變因，不代表這些核心功能在一般系統中沒有用途。
+只處理 4 KiB private anonymous pages、單執行緒 workload、單一 volatile Type-3 與 1-way region。THP（Transparent Huge Pages）可讓核心使用較大的頁面；KSM（Kernel Samepage Merging）可合併內容相同的記憶體頁。實驗關閉 THP、automatic NUMA balancing、KSM、swap 與自動 demotion 等干擾，才能把 query 的變化連回本專案送出的移頁要求。這是控制變因，不代表這些核心功能在一般系統中沒有用途。
 
 `CONFIG_TRANSPARENT_HUGEPAGE=y` 是編譯能力與相依條件；cmdline 的 `transparent_hugepage=never` 和 mapping 的 `MADV_NOHUGEPAGE` 是實驗執行時的限制。兩者位於不同層，不能為了停用執行時 THP 而直接刪掉 DAX 所需的 build dependency。
 
@@ -368,7 +370,7 @@ flowchart TB
 | serial console | Guest → Host：boot messages、service output、correlated completion marker | 回答開機與錯誤時間線；需與 guest.json/dmesg/raw data 對照，單一 PASS 字串不足。 |
 | 9p share | Host → Guest：config/binary；Guest → Host：JSONL、sysfs snapshots、trace、TAP | 傳遞可重算原始紀錄。Host 檢查 schema、run_id、hash 與數值契約，不能直接相信檔名或狀態欄。 |
 
-QMP 是帶 request ID 的 JSON 協定，也會收到沒有對應當前命令的非同步事件。`QMP.command()` 會保存 events 與其他 response ID，直到找到目前命令的回應；不能假設每次讀取的第一筆 JSON 就是剛送出的回覆。QMP socket 路徑受 Unix socket 長度限制，runner 在第 212 行先檢查，過長時應縮短 Linux workspace 路徑。
+QMP 是 QEMU Machine Protocol：Host 以 JSON 訊息控制及查詢 QEMU 的介面。它使用 request ID，也會收到沒有對應當前命令的非同步事件。`QMP.command()` 會保存 events 與其他 response ID，直到找到目前命令的回應；不能假設每次讀取的第一筆 JSON 就是剛送出的回覆。QMP socket 路徑受 Unix socket 長度限制，runner 在第 212 行先檢查，過長時應縮短 Linux workspace 路徑。
 
 
 ### 3.3 磁碟、共享目錄與執行檔的生命週期
@@ -667,7 +669,7 @@ flowchart TD
 
 `do_pages_move()` 逐 entry 讀取 VA 和 target。它先檢查 target 是否在節點編號範圍內、是否有記憶體，以及是否被目前程序的 cpuset 允許；通過才呼叫 `add_folio_for_migration()`。
 
-`add_folio_for_migration()` 持有 `mmap_read_lock`，用 `vma_lookup()` 找出涵蓋 VA 的 VMA，再用 `folio_walk_start()` 沿頁表取得 folio。VMA 描述合法映射範圍；頁表描述當下 VA 對應的實體頁；folio 是核心管理一個或多個連續 base pages 的單位。本實驗固定 4 KiB 頁且排除 THP，不能因此推論所有 folio 都只有一頁。
+`add_folio_for_migration()` 持有 `mmap_read_lock`，用 `vma_lookup()` 找出涵蓋 VA 的 VMA，再用 `folio_walk_start()` 沿頁表取得 folio。VMA 是 Virtual Memory Area，描述程序的一段虛擬記憶體映射範圍；頁表描述當下 VA 對應的實體頁；folio 是核心管理一個或多個連續 base pages 的單位。本實驗固定 4 KiB 頁且排除 THP，不能因此推論所有 folio 都只有一頁。
 
 `__add_folio_for_migration()` 又分三種結果：已在 target 回傳 0；成功從 LRU 隔離並排入 migration list 回傳 1；不能處理則回傳負錯誤碼。這裡 `folio_isolate_lru()` 的「隔離」指從一般 LRU 管理路徑取出，並不表示資料已經複製到另一個節點。
 
@@ -681,7 +683,7 @@ flowchart TD
 
 ### 5.4 真正移頁時，VA 為什麼不需要改？
 
-`do_move_pages_to_node()` 建立 `migration_target_control`，設定目標 nid、`GFP_HIGHUSER_MOVABLE | __GFP_THISNODE` 與原因 `MR_SYSCALL`，接著呼叫 `migrate_pages(..., MIGRATE_SYNC, MR_SYSCALL, ...)`。`__GFP_THISNODE` 限制目的頁配置在指定節點；失敗不代表可以默默在別處配置後宣稱成功。
+`do_move_pages_to_node()` 建立 `migration_target_control`，設定目標 nid（node ID）、`GFP_HIGHUSER_MOVABLE | __GFP_THISNODE` 與原因 `MR_SYSCALL`，接著呼叫 `migrate_pages(..., MIGRATE_SYNC, MR_SYSCALL, ...)`。`__GFP_THISNODE` 限制目的頁配置在指定節點；失敗不代表可以默默在別處配置後宣稱成功。下圖中的 PTE 是 Page Table Entry（頁表項目）；TLB 是 Translation Lookaside Buffer，用來快取位址轉譯結果，映射變更時需依核心路徑處理其一致性。
 
 ```text
 migrate_pages()
@@ -855,7 +857,7 @@ succeeded += execute(promote, fast, static_cast<int>(epoch), batches);
 
 ### 6.4 EWMA：讓單輪次數變成可累積的熱度
 
-對每頁先算本輪訊號，再與上一輪分數平均：
+EWMA 是 Exponentially Weighted Moving Average（指數加權移動平均）：每輪把新觀測與上一輪分數加權，較舊的觀測影響會逐漸衰減。此處對每頁先算本輪訊號，再與上一輪分數平均：
 
 ```text
 instant[e] = min(1, counts[e] / 2)
@@ -1012,7 +1014,7 @@ AWFR(e) = Σ counts[p] × 1(before[p] == fast) / 25000
 ready_HFR(e) = Σ 1(after[p] == fast), p ∈ H_e / 6144
 ```
 
-AWFR 是 Access-Weighted Fast Residency，描述本輪操作有多少比例發生在配置於 fast 的頁。Ready HFR 是 hot-page fast residency，描述 policy 完成後有多少 hot pages 已準備在 fast。兩者都不是 cache hit rate，也不是延遲或 speedup。
+AWFR 是 Access-Weighted Fast Residency（依存取次數加權的 fast 配置比例），描述本輪操作有多少比例發生在配置於 fast 的頁。Ready HFR 是 hot-page fast residency（輪末熱頁的 fast 配置比例），描述 policy 完成後有多少 hot pages 已準備在 fast。兩者都不是 cache hit rate，也不是延遲或 speedup。
 
 實作中的核心算式為：
 
@@ -1271,7 +1273,7 @@ python3 -m json.tool results/gates/M4.json
 
 ### 9.2 先準備 collector，才允許 target 開始
 
-[`guest/trace.py`](../guest/trace.py) 的 `collect()` 先呼叫 `guest_identity()`，確認 pinned Guest kernel、QEMU DMI 與 Guest root，通過後才 mount tracefs 或啟動子程序。它建立 `/sys/kernel/tracing/instances/tierlab_RUN_ID`，不重用既有 instance，也不清除別人的 instance。
+[`guest/trace.py`](../guest/trace.py) 的 `collect()` 先呼叫 `guest_identity()`，確認 pinned Guest kernel、QEMU DMI 與 Guest root，通過後才 mount tracefs 或啟動子程序。tracefs 是 Linux 提供追蹤控制與紀錄的虛擬檔案系統；instance 是一組獨立的追蹤設定與 buffer。程式建立 `/sys/kernel/tracing/instances/tierlab_RUN_ID`，不重用既有 instance，也不清除別人的 instance。
 
 ```mermaid
 flowchart TD
